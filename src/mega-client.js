@@ -1,20 +1,60 @@
 'use strict'
 
+const readline = require('readline')
 const { Storage } = require('megajs')
 
 /**
- * Authenticates to MEGA using credentials from environment variables.
- * Returns a logged-in Storage instance.
+ * Prompt the user for a value on stderr/stdin (so stdout stays clean for piping).
+ *
+ * @param {string} question
+ * @returns {Promise<string>}
+ */
+function prompt (question) {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stderr })
+  return new Promise((resolve) => {
+    rl.question(question, (answer) => {
+      rl.close()
+      resolve(answer.trim())
+    })
+  })
+}
+
+/**
+ * Attempt one MEGA login and return the authenticated Storage instance.
+ *
+ * @param {{ email: string, password: string, mfaCode?: string }} opts
+ * @returns {Promise<Storage>}
+ */
+function loginOnce ({ email, password, mfaCode }) {
+  const storageOpts = { email, password }
+  if (mfaCode) storageOpts.secondFactorCode = mfaCode
+
+  const storage = new Storage(storageOpts)
+
+  return new Promise((resolve, reject) => {
+    storage.login((err) => {
+      if (!err) return resolve(storage)
+      reject(Object.assign(err, { _storage: storage }))
+    })
+  })
+}
+
+/**
+ * Authenticates to MEGA and returns a logged-in Storage instance.
+ *
+ * If the account has MFA enabled the function will:
+ *   1. Use MEGA_MFA_CODE from the environment if present.
+ *   2. Prompt the user interactively on subsequent attempts when the code is
+ *      missing or has expired (EEXPIRED / EMFAREQUIRED).
  *
  * Required env vars: MEGA_EMAIL, MEGA_PASSWORD
- * Optional env vars: MEGA_MFA_CODE (TOTP code if MFA is enabled on the account)
+ * Optional env vars: MEGA_MFA_CODE  (6-digit TOTP — valid for ~30 s only)
  *
- * @returns {Promise<Storage>}
+ * @returns {Promise<import('megajs').Storage>}
  */
 async function createMegaClient () {
   const email = process.env.MEGA_EMAIL
   const password = process.env.MEGA_PASSWORD
-  const mfaCode = process.env.MEGA_MFA_CODE || undefined
 
   if (!email || !password) {
     throw new Error(
@@ -22,29 +62,44 @@ async function createMegaClient () {
     )
   }
 
-  const storageOpts = { email, password }
-  if (mfaCode) storageOpts.secondFactorCode = mfaCode
+  // First attempt: use env var if available
+  let mfaCode = process.env.MEGA_MFA_CODE || undefined
 
-  const storage = new Storage(storageOpts)
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      return await loginOnce({ email, password, mfaCode })
+    } catch (err) {
+      const msg = err.message || ''
 
-  await new Promise((resolve, reject) => {
-    storage.login((err) => {
-      if (err) {
-        if (err.message && err.message.includes('EMFAREQUIRED')) {
-          reject(new Error(
-            'MEGA account has Multi-Factor Authentication enabled. ' +
-            'Set the MEGA_MFA_CODE environment variable to your current TOTP code and retry.'
-          ))
+      const needsMfa = msg.includes('EMFAREQUIRED')
+      // EEXPIRED during login almost always means the TOTP code has expired
+      const mfaExpired = msg.includes('EEXPIRED') && mfaCode
+
+      if (needsMfa || mfaExpired) {
+        if (needsMfa) {
+          process.stderr.write('MEGA account requires Multi-Factor Authentication.\n')
         } else {
-          reject(err)
+          process.stderr.write('MEGA MFA code has expired.\n')
         }
-      } else {
-        resolve()
-      }
-    })
-  })
 
-  return storage
+        if (!process.stdin.isTTY) {
+          // Non-interactive: can't prompt — fail with a helpful message
+          throw new Error(
+            'MEGA MFA code required but stdin is not a terminal. ' +
+            'Set a fresh MEGA_MFA_CODE in your .env and re-run immediately.'
+          )
+        }
+
+        mfaCode = await prompt('Enter your current MEGA TOTP code: ')
+        continue
+      }
+
+      // Any other error is not recoverable by retrying
+      throw err
+    }
+  }
+
+  throw new Error('MEGA authentication failed after multiple attempts')
 }
 
 module.exports = { createMegaClient }

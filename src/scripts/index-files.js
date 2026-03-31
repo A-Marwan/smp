@@ -23,25 +23,14 @@ const { DB_PATH } = require('../db')
 async function main () {
   console.log('Connecting to MEGA...')
 
-  // MEGA occasionally returns EEXPIRED (-8) on the first login attempt when a
-  // previous session was recently closed.  Retrying with a brand-new call to
-  // createMegaClient() (which always constructs a fresh Storage instance) is
-  // sufficient to recover without touching mega-client.js internals.
+  // createMegaClient() handles MFA interactively — prompts for a fresh TOTP
+  // code when EMFAREQUIRED or EEXPIRED (expired TOTP) is returned by MEGA.
   let storage
-  for (let attempt = 0; attempt <= 2; attempt++) {
-    try {
-      storage = await createMegaClient()
-      break
-    } catch (err) {
-      const isExpired = err.message && err.message.includes('EEXPIRED')
-      if (isExpired && attempt < 2) {
-        console.warn(`MEGA session expired, retrying (attempt ${attempt + 2}/3)...`)
-        await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)))
-        continue
-      }
-      console.error('Authentication failed:', err.message)
-      process.exit(1)
-    }
+  try {
+    storage = await createMegaClient()
+  } catch (err) {
+    console.error('Authentication failed:', err.message)
+    process.exit(1)
   }
 
   console.log('Authenticated. Crawling MEGA file tree...\n')
