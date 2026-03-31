@@ -11,7 +11,7 @@ const { Storage } = require('megajs')
  *
  * @returns {Promise<Storage>}
  */
-async function createMegaClient () {
+async function createMegaClient ({ retries = 2 } = {}) {
   const email = process.env.MEGA_EMAIL
   const password = process.env.MEGA_PASSWORD
   const mfaCode = process.env.MEGA_MFA_CODE || undefined
@@ -25,26 +25,40 @@ async function createMegaClient () {
   const storageOpts = { email, password }
   if (mfaCode) storageOpts.secondFactorCode = mfaCode
 
-  const storage = new Storage(storageOpts)
+  let lastErr
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    // Create a fresh Storage instance on every attempt so no stale session
+    // token from a previous run can trigger EEXPIRED (-8).
+    const storage = new Storage(storageOpts)
 
-  await new Promise((resolve, reject) => {
-    storage.login((err) => {
-      if (err) {
-        if (err.message && err.message.includes('EMFAREQUIRED')) {
-          reject(new Error(
-            'MEGA account has Multi-Factor Authentication enabled. ' +
-            'Set the MEGA_MFA_CODE environment variable to your current TOTP code and retry.'
-          ))
-        } else {
-          reject(err)
-        }
-      } else {
-        resolve()
+    try {
+      await new Promise((resolve, reject) => {
+        storage.login((err) => {
+          if (!err) return resolve()
+
+          if (err.message && err.message.includes('EMFAREQUIRED')) {
+            reject(new Error(
+              'MEGA account has Multi-Factor Authentication enabled. ' +
+              'Set the MEGA_MFA_CODE environment variable to your current TOTP code and retry.'
+            ))
+          } else {
+            reject(err)
+          }
+        })
+      })
+      return storage
+    } catch (err) {
+      lastErr = err
+      // EEXPIRED means the session/token is stale — a fresh instance fixes it.
+      // Any other error is likely permanent; re-throw immediately.
+      if (!err.message || !err.message.includes('EEXPIRED')) throw err
+      if (attempt < retries) {
+        await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)))
       }
-    })
-  })
+    }
+  }
 
-  return storage
+  throw lastErr
 }
 
 module.exports = { createMegaClient }
