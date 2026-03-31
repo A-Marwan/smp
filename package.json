@@ -8,7 +8,8 @@
   },
   "scripts": {
     "start": "node src/index.js",
-    "dev": "node --watch src/index.js"
+    "dev": "node --watch src/index.js",
+    "scan": "node src/scripts/scan-mega.js"
   },
   "dependencies": {
     "stremio-addon-sdk": "^1.6.10",
