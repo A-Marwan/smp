@@ -1,0 +1,20 @@
+{
+  "name": "stremio-mega-proxy",
+  "version": "0.1.0",
+  "description": "Stremio addon for streaming content from MEGA cloud storage",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "stremio-addon-sdk": "^1.6.10",
+    "megajs": "^1.0.0",
+    "better-sqlite3": "^12.0.0",
+    "express": "^4.18.3",
+    "dotenv": "^16.4.5"
+  }
+}
