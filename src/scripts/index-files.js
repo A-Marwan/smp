@@ -36,7 +36,7 @@ async function main () {
       const isExpired = err.message && err.message.includes('EEXPIRED')
       if (isExpired && attempt < 2) {
         console.warn(`MEGA session expired, retrying (attempt ${attempt + 2}/3)...`)
-        await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)))
+        await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)))
         continue
       }
       console.error('Authentication failed:', err.message)

@@ -25,11 +25,20 @@ async function main () {
   console.log('Connecting to MEGA...')
 
   let storage
-  try {
-    storage = await createMegaClient()
-  } catch (err) {
-    console.error('Authentication failed:', err.message)
-    process.exit(1)
+  for (let attempt = 0; attempt <= 2; attempt++) {
+    try {
+      storage = await createMegaClient()
+      break
+    } catch (err) {
+      const isExpired = err.message && err.message.includes('EEXPIRED')
+      if (isExpired && attempt < 2) {
+        console.warn(`MEGA session expired, retrying (attempt ${attempt + 2}/3)...`)
+        await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)))
+        continue
+      }
+      console.error('Authentication failed:', err.message)
+      process.exit(1)
+    }
   }
 
   console.log('Authenticated. Starting file scan...\n')
