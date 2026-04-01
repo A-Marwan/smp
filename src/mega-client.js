@@ -26,7 +26,7 @@ function prompt (question) {
  * @returns {Promise<Storage>}
  */
 function loginOnce ({ email, password, mfaCode }) {
-  const storageOpts = { email, password, keepalive: false }
+  const storageOpts = { email, password, keepalive: false, autologin: false }
   if (mfaCode) storageOpts.secondFactorCode = mfaCode
 
   const storage = new Storage(storageOpts)
