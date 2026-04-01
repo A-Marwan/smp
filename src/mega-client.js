@@ -26,7 +26,7 @@ function prompt (question) {
  * @returns {Promise<Storage>}
  */
 function loginOnce ({ email, password, mfaCode }) {
-  const storageOpts = { email, password }
+  const storageOpts = { email, password, keepalive: false }
   if (mfaCode) storageOpts.secondFactorCode = mfaCode
 
   const storage = new Storage(storageOpts)
@@ -34,7 +34,7 @@ function loginOnce ({ email, password, mfaCode }) {
   return new Promise((resolve, reject) => {
     storage.login((err) => {
       if (!err) return resolve(storage)
-      reject(Object.assign(err, { _storage: storage }))
+      reject(err)
     })
   })
 }
@@ -69,7 +69,6 @@ async function createMegaClient () {
     try {
       return await loginOnce({ email, password, mfaCode })
     } catch (err) {
-      err._storage?.close?.()
       const msg = err.message || ''
 
       const needsMfa = msg.includes('EMFAREQUIRED')
