@@ -69,17 +69,18 @@ async function createMegaClient () {
     try {
       return await loginOnce({ email, password, mfaCode })
     } catch (err) {
+      err._storage?.close?.()
       const msg = err.message || ''
 
       const needsMfa = msg.includes('EMFAREQUIRED')
-      // EEXPIRED during login almost always means the TOTP code has expired
-      const mfaExpired = msg.includes('EEXPIRED') && mfaCode
+      const isExpired = msg.includes('EEXPIRED')
+      const mfaExpired = isExpired && mfaCode
 
       if (needsMfa || mfaExpired) {
         if (needsMfa) {
           process.stderr.write('MEGA account requires Multi-Factor Authentication.\n')
         } else {
-          process.stderr.write('MEGA MFA code has expired.\n')
+          process.stderr.write('Code expired — please open your authenticator app and enter a fresh 6-digit code immediately.\n')
         }
 
         if (!process.stdin.isTTY) {
@@ -91,6 +92,12 @@ async function createMegaClient () {
         }
 
         mfaCode = await prompt('Enter your current MEGA TOTP code: ')
+        attempt = 0 // reset counter for interactive attempts
+        continue
+      }
+
+      if (isExpired) {
+        // Non-MFA EEXPIRED (stale session): retry with a fresh Storage instance
         continue
       }
 
