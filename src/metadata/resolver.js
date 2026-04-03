@@ -91,4 +91,4 @@ async function resolveToImdbId ({ title, year, type }) {
   return metas[0].id
 }
 
-module.exports = { resolveToImdbId }
+module.exports = { resolveToImdbId, fetchWithRetry }

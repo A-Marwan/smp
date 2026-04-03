@@ -1,16 +1,76 @@
 const { addonBuilder } = require('stremio-addon-sdk')
 const manifest = require('./manifest')
 const { getDb } = require('./db')
+const { getMetadata } = require('./metadata/cinemeta')
 
 const builder = new addonBuilder(manifest)
 
-builder.defineCatalogHandler(({ type, id }) =>
-  Promise.resolve({ metas: [] })
-)
+builder.defineCatalogHandler(async ({ type, id }) => {
+  const db = getDb()
 
-builder.defineMetaHandler(({ type, id }) =>
-  Promise.resolve({ meta: null })
-)
+  let rows
+  if (type === 'movie') {
+    rows = db.prepare(
+      'SELECT DISTINCT imdb_id FROM files WHERE season = 0 AND episode = 0'
+    ).all()
+  } else {
+    rows = db.prepare(
+      'SELECT DISTINCT imdb_id FROM files WHERE season > 0'
+    ).all()
+  }
+
+  const metas = []
+  for (const row of rows) {
+    const meta = await getMetadata(type, row.imdb_id)
+    if (meta) {
+      metas.push({
+        id: meta.id || row.imdb_id,
+        type,
+        name: meta.name || row.imdb_id,
+        poster: meta.poster || null,
+        posterShape: 'poster',
+        year: meta.year || null
+      })
+    }
+  }
+
+  return { metas }
+})
+
+builder.defineMetaHandler(async ({ type, id }) => {
+  const meta = await getMetadata(type, id)
+  if (!meta) {
+    return { meta: null }
+  }
+
+  const result = {
+    id: meta.id || id,
+    type,
+    name: meta.name,
+    poster: meta.poster || null,
+    background: meta.background || null,
+    description: meta.description || null,
+    year: meta.year || null,
+    genres: meta.genres || []
+  }
+
+  if (type === 'series') {
+    const db = getDb()
+    const episodes = db.prepare(
+      'SELECT season, episode, filename FROM files WHERE imdb_id = ? AND season > 0 ORDER BY season, episode'
+    ).all(id)
+
+    result.videos = episodes.map((ep) => ({
+      id: `${id}:${ep.season}:${ep.episode}`,
+      title: ep.filename || `S${String(ep.season).padStart(2, '0')}E${String(ep.episode).padStart(2, '0')}`,
+      season: ep.season,
+      episode: ep.episode,
+      released: new Date().toISOString()
+    }))
+  }
+
+  return { meta: result }
+})
 
 builder.defineStreamHandler(({ type, id }) => {
   const token = process.env.USER_TOKEN
