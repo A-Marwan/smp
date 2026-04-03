@@ -61,11 +61,34 @@ app.get('/:token/stream/:handle', async (req, res) => {
     const contentType = MIME_TYPES[ext] || 'application/octet-stream'
 
     res.setHeader('Content-Type', contentType)
-    if (file.size) {
-      res.setHeader('Content-Length', file.size)
-    }
+    res.setHeader('Accept-Ranges', 'bytes')
 
-    const downloadStream = file.download()
+    const range = req.headers.range
+    let downloadStream
+
+    if (range && file.size) {
+      const parts = range.replace(/bytes=/, '').split('-')
+      const start = parseInt(parts[0], 10)
+      const end = parts[1] ? parseInt(parts[1], 10) : file.size - 1
+      const chunkSize = end - start + 1
+
+      if (start >= file.size || end >= file.size || start > end || isNaN(start)) {
+        return res.status(416)
+          .setHeader('Content-Range', `bytes */${file.size}`)
+          .end()
+      }
+
+      res.status(206)
+      res.setHeader('Content-Range', `bytes ${start}-${end}/${file.size}`)
+      res.setHeader('Content-Length', chunkSize)
+
+      downloadStream = file.download({ start, end: end + 1 })
+    } else {
+      if (file.size) {
+        res.setHeader('Content-Length', file.size)
+      }
+      downloadStream = file.download()
+    }
 
     downloadStream.on('error', (err) => {
       const msg = err.message || ''
