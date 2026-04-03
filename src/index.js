@@ -7,6 +7,7 @@ const express = require('express')
 const { getRouter } = require('stremio-addon-sdk')
 const addonInterface = require('./addon')
 const { getStorage, clearStorage } = require('./mega-storage')
+const { getRelay, clearRelays } = require('./mega-relay')
 
 const app = express()
 const router = getRouter(addonInterface)
@@ -56,6 +57,7 @@ app.post('/:token/admin/mfa', async (req, res) => {
 
   try {
     clearStorage()
+    clearRelays()
     await getStorage({ mfaCode: code })
     console.log('MEGA re-authenticated via admin MFA endpoint')
     res.json({ ok: true })
@@ -89,7 +91,7 @@ app.get('/:token/stream/:handle', async (req, res) => {
     res.setHeader('Accept-Ranges', 'bytes')
 
     const range = req.headers.range
-    let downloadStream
+    const relay = getRelay(file)
 
     if (range && file.size) {
       const parts = range.replace(/bytes=/, '').split('-')
@@ -107,47 +109,20 @@ app.get('/:token/stream/:handle', async (req, res) => {
       res.setHeader('Content-Range', `bytes ${start}-${end}/${file.size}`)
       res.setHeader('Content-Length', chunkSize)
 
-      downloadStream = file.download({ start, end: end + 1 })
+      await relay.serve(start, end, res, req)
     } else {
       if (file.size) {
         res.setHeader('Content-Length', file.size)
       }
-      downloadStream = file.download()
+      await relay.serve(0, file.size - 1, res, req)
     }
-
-    downloadStream.on('error', (err) => {
-      const msg = err.message || ''
-      console.error(`MEGA download error for ${handle}:`, msg)
-
-      if (msg.includes('EEXPIRED')) {
-        clearStorage()
-        console.error('MEGA session expired during download — admin must POST a fresh MFA code to /:token/admin/mfa')
-        if (!res.headersSent) {
-          return res.status(503).json({ error: 'MEGA session expired — admin must re-authenticate via POST /:token/admin/mfa' })
-        }
-        return res.destroy()
-      }
-
-      if (!res.headersSent) {
-        if (msg.includes('EOVERQUOTA') || msg.includes('over quota')) {
-          return res.status(429).json({ error: 'MEGA transfer quota exceeded. Try again later.' })
-        }
-        return res.status(502).json({ error: 'MEGA download failed' })
-      }
-      res.destroy()
-    })
-
-    req.on('close', () => {
-      downloadStream.destroy()
-    })
-
-    downloadStream.pipe(res)
   } catch (err) {
     const msg = err.message || ''
     console.error(`Stream proxy error for ${handle}:`, msg)
 
     if (msg.includes('EEXPIRED')) {
       clearStorage()
+      clearRelays()
       console.error('MEGA session expired — admin must POST a fresh MFA code to /:token/admin/mfa')
     }
 
@@ -155,7 +130,12 @@ app.get('/:token/stream/:handle', async (req, res) => {
       if (msg.includes('MFA') || msg.includes('EEXPIRED') || msg.includes('EMFAREQUIRED')) {
         return res.status(503).json({ error: 'MEGA session expired — admin must re-authenticate via POST /:token/admin/mfa' })
       }
-      res.status(500).json({ error: 'Internal server error' })
+      if (msg.includes('EOVERQUOTA') || msg.includes('over quota')) {
+        return res.status(429).json({ error: 'MEGA transfer quota exceeded. Try again later.' })
+      }
+      res.status(502).json({ error: 'MEGA download failed' })
+    } else {
+      res.destroy()
     }
   }
 })
