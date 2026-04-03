@@ -1,0 +1,14 @@
+[Unit]
+Description=Stremio MEGA Proxy
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/smp
+ExecStart=/usr/bin/npm start
+EnvironmentFile=/opt/smp/.env
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
