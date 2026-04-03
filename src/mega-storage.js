@@ -10,13 +10,14 @@ let _readyPromise = null
  * On first call, logs in and loads the file tree.
  * Subsequent calls return the cached instance.
  *
+ * @param {{ mfaCode?: string }} [opts]
  * @returns {Promise<import('megajs').Storage>}
  */
-function getStorage () {
+function getStorage (opts) {
   if (_storage) return Promise.resolve(_storage)
   if (_readyPromise) return _readyPromise
 
-  _readyPromise = createMegaClient()
+  _readyPromise = createMegaClient(opts)
     .then((storage) => {
       _storage = storage
       _readyPromise = null
@@ -31,6 +32,13 @@ function getStorage () {
 }
 
 /**
+ * Returns true if a cached MEGA Storage instance is available (no login attempt).
+ */
+function isStorageReady () {
+  return _storage !== null
+}
+
+/**
  * Clears cached storage (for shutdown / reconnect).
  */
 function clearStorage () {
@@ -41,4 +49,4 @@ function clearStorage () {
   _readyPromise = null
 }
 
-module.exports = { getStorage, clearStorage }
+module.exports = { getStorage, isStorageReady, clearStorage }

@@ -50,9 +50,10 @@ function loginOnce ({ email, password, mfaCode }) {
  * Required env vars: MEGA_EMAIL, MEGA_PASSWORD
  * Optional env vars: MEGA_MFA_CODE  (6-digit TOTP — valid for ~30 s only)
  *
+ * @param {{ mfaCode?: string }} [opts]
  * @returns {Promise<import('megajs').Storage>}
  */
-async function createMegaClient () {
+async function createMegaClient (opts = {}) {
   const email = process.env.MEGA_EMAIL
   const password = process.env.MEGA_PASSWORD
 
@@ -62,8 +63,8 @@ async function createMegaClient () {
     )
   }
 
-  // First attempt: use env var if available
-  let mfaCode = process.env.MEGA_MFA_CODE || undefined
+  // First attempt: use caller-supplied code, then env var
+  let mfaCode = opts.mfaCode || process.env.MEGA_MFA_CODE || undefined
 
   for (let attempt = 0; attempt < 4; attempt++) {
     try {

@@ -6,7 +6,7 @@ const PORT = parseInt(process.env.PORT || '7000', 10)
 const express = require('express')
 const { getRouter } = require('stremio-addon-sdk')
 const addonInterface = require('./addon')
-const { getStorage } = require('./mega-storage')
+const { getStorage, clearStorage } = require('./mega-storage')
 
 const app = express()
 const router = getRouter(addonInterface)
@@ -39,6 +39,31 @@ function findInTree (node, handle) {
   }
   return null
 }
+
+app.use(express.json())
+
+// --- Admin MFA endpoint ---
+app.post('/:token/admin/mfa', async (req, res) => {
+  const expectedToken = process.env.USER_TOKEN
+  if (!expectedToken || req.params.token !== expectedToken) {
+    return res.status(403).json({ ok: false, error: 'Forbidden' })
+  }
+
+  const code = req.body && req.body.code
+  if (!code || typeof code !== 'string') {
+    return res.status(400).json({ ok: false, error: 'Missing "code" in request body' })
+  }
+
+  try {
+    clearStorage()
+    await getStorage({ mfaCode: code })
+    console.log('MEGA re-authenticated via admin MFA endpoint')
+    res.json({ ok: true })
+  } catch (err) {
+    console.error('Admin MFA failed:', err.message)
+    res.status(500).json({ ok: false, error: err.message })
+  }
+})
 
 // --- Proxy streaming endpoint (must be registered before the Stremio SDK catch-all) ---
 app.get('/:token/stream/:handle', async (req, res) => {
@@ -94,6 +119,15 @@ app.get('/:token/stream/:handle', async (req, res) => {
       const msg = err.message || ''
       console.error(`MEGA download error for ${handle}:`, msg)
 
+      if (msg.includes('EEXPIRED')) {
+        clearStorage()
+        console.error('MEGA session expired during download — admin must POST a fresh MFA code to /:token/admin/mfa')
+        if (!res.headersSent) {
+          return res.status(503).json({ error: 'MEGA session expired — admin must re-authenticate via POST /:token/admin/mfa' })
+        }
+        return res.destroy()
+      }
+
       if (!res.headersSent) {
         if (msg.includes('EOVERQUOTA') || msg.includes('over quota')) {
           return res.status(429).json({ error: 'MEGA transfer quota exceeded. Try again later.' })
@@ -109,8 +143,18 @@ app.get('/:token/stream/:handle', async (req, res) => {
 
     downloadStream.pipe(res)
   } catch (err) {
-    console.error(`Stream proxy error for ${handle}:`, err.message)
+    const msg = err.message || ''
+    console.error(`Stream proxy error for ${handle}:`, msg)
+
+    if (msg.includes('EEXPIRED')) {
+      clearStorage()
+      console.error('MEGA session expired — admin must POST a fresh MFA code to /:token/admin/mfa')
+    }
+
     if (!res.headersSent) {
+      if (msg.includes('MFA') || msg.includes('EEXPIRED') || msg.includes('EMFAREQUIRED')) {
+        return res.status(503).json({ error: 'MEGA session expired — admin must re-authenticate via POST /:token/admin/mfa' })
+      }
       res.status(500).json({ error: 'Internal server error' })
     }
   }
@@ -127,11 +171,16 @@ app.use('/:token', (req, res, next) => {
 // Root fallback (no token)
 app.use('/', router)
 
-// Eager MEGA login on startup to preload the file tree and avoid cold-start delay
+// Eager MEGA login on startup to preload the file tree and avoid cold-start delay.
+// If MFA is required and no code is available, the server still starts — admin can
+// POST a TOTP code to /:token/admin/mfa later.
 if (process.env.USER_TOKEN) {
   getStorage()
     .then(() => console.log('MEGA storage ready'))
-    .catch((err) => console.error('MEGA storage init failed:', err.message))
+    .catch((err) => {
+      console.error('MEGA storage init failed:', err.message)
+      console.error('Server is running but MEGA is not authenticated. Use POST /:token/admin/mfa to provide a TOTP code.')
+    })
 }
 
 app.listen(PORT, () => {
