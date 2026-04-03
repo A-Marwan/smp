@@ -1,6 +1,7 @@
 'use strict'
 
 const { createMegaClient } = require('./mega-client')
+const logger = require('./logger')
 
 let _storage = null
 let _readyPromise = null
@@ -14,17 +15,27 @@ let _readyPromise = null
  * @returns {Promise<import('megajs').Storage>}
  */
 function getStorage (opts) {
-  if (_storage) return Promise.resolve(_storage)
-  if (_readyPromise) return _readyPromise
+  if (_storage) {
+    logger.info('mega-storage', 'cache HIT — returning existing storage')
+    return Promise.resolve(_storage)
+  }
+  if (_readyPromise) {
+    logger.info('mega-storage', 'dedup — login already in flight, attaching to pending promise')
+    return _readyPromise
+  }
+
+  logger.info('mega-storage', 'cache MISS — initiating MEGA login')
 
   _readyPromise = createMegaClient(opts)
     .then((storage) => {
       _storage = storage
       _readyPromise = null
+      logger.info('mega-storage', 'login succeeded — storage cached')
       return storage
     })
     .catch((err) => {
       _readyPromise = null
+      logger.error('mega-storage', 'login failed', { error: err.message })
       throw err
     })
 
@@ -43,7 +54,10 @@ function isStorageReady () {
  */
 function clearStorage () {
   if (_storage) {
+    logger.warn('mega-storage', 'clearStorage called — evicting cached storage')
     try { _storage.close() } catch (_) {}
+  } else {
+    logger.info('mega-storage', 'clearStorage called — no cached storage to evict')
   }
   _storage = null
   _readyPromise = null

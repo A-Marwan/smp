@@ -1,6 +1,7 @@
 'use strict'
 
 const { fetchWithRetry } = require('./resolver')
+const logger = require('../logger')
 
 const CINEMETA_BASE = 'https://v3-cinemeta.strem.io'
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000 // 24 hours
@@ -28,7 +29,7 @@ async function getMetadata (type, imdbId) {
   try {
     data = await fetchWithRetry(url)
   } catch (err) {
-    console.warn(`[cinemeta] Failed to fetch ${type}/${imdbId}: ${err.message}`)
+    logger.warn('cinemeta', 'fetch failed', { type, imdbId, error: err.message })
     return null
   }
 

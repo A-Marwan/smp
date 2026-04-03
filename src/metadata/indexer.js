@@ -3,6 +3,7 @@
 const { parseFilename } = require('./parser')
 const { resolveToImdbId } = require('./resolver')
 const { getDb } = require('../db')
+const logger = require('../logger')
 
 /** Video extensions that are worth indexing. */
 const VIDEO_EXTS = new Set(['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.m4v', '.ts', '.mpg', '.mpeg', '.webm'])
@@ -50,7 +51,7 @@ async function indexFiles (files) {
       imdbId = await resolveToImdbId({ title: parsed.title, year: parsed.year, type: parsed.type })
     } catch (err) {
       const reason = err.message
-      console.warn(`[WARN] resolve failed — ${file.name}: ${reason}`)
+      logger.warn('indexer', 'resolve failed', { filename: file.name, reason })
       insertUnmatched.run({ filename: file.name, mega_handle: file.handle, reason })
       stats.unmatched++
       continue
@@ -58,7 +59,7 @@ async function indexFiles (files) {
 
     if (!imdbId) {
       const reason = `No match found on Cinemeta for "${parsed.title}"${parsed.year ? ` (${parsed.year})` : ''}`
-      console.warn(`[WARN] ${reason} — ${file.name}`)
+      logger.warn('indexer', 'no Cinemeta match', { filename: file.name, reason })
       insertUnmatched.run({ filename: file.name, mega_handle: file.handle, reason })
       stats.unmatched++
       continue
@@ -76,7 +77,7 @@ async function indexFiles (files) {
     const epLabel = parsed.season != null
       ? ` S${String(parsed.season).padStart(2, '0')}E${String(parsed.episode).padStart(2, '0')}`
       : ''
-    console.log(`[OK]   ${file.name} → ${imdbId}${epLabel}`)
+    logger.info('indexer', 'file indexed', { filename: file.name, imdbId, episode: epLabel || null })
     stats.matched++
   }
 

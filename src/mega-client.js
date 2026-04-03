@@ -2,6 +2,14 @@
 
 const readline = require('readline')
 const { Storage } = require('megajs')
+const logger = require('./logger')
+
+function maskEmail (email) {
+  if (!email || typeof email !== 'string') return '(unknown)'
+  const at = email.indexOf('@')
+  if (at <= 3) return email.slice(0, at) + '***' + email.slice(at)
+  return email.slice(0, 3) + '***' + email.slice(at)
+}
 
 /**
  * Prompt the user for a value on stderr/stdin (so stdout stays clean for piping).
@@ -58,6 +66,7 @@ async function createMegaClient (opts = {}) {
   const password = process.env.MEGA_PASSWORD
 
   if (!email || !password) {
+    logger.error('mega-client', 'MEGA credentials missing in environment')
     throw new Error(
       'MEGA credentials missing: set MEGA_EMAIL and MEGA_PASSWORD environment variables'
     )
@@ -67,6 +76,8 @@ async function createMegaClient (opts = {}) {
   let mfaCode = opts.mfaCode || process.env.MEGA_MFA_CODE || undefined
 
   for (let attempt = 0; attempt < 4; attempt++) {
+    logger.info('mega-client', 'login attempt', { attempt: attempt + 1, email: maskEmail(email), hasMfaCode: !!mfaCode })
+
     try {
       return await loginOnce({ email, password, mfaCode })
     } catch (err) {
@@ -79,11 +90,14 @@ async function createMegaClient (opts = {}) {
       if (needsMfa || mfaExpired) {
         if (needsMfa) {
           process.stderr.write('MEGA account requires Multi-Factor Authentication.\n')
+          logger.warn('mega-client', 'EMFAREQUIRED — MFA code needed', { email: maskEmail(email) })
         } else {
           process.stderr.write('Code expired — please open your authenticator app and enter a fresh 6-digit code immediately.\n')
+          logger.warn('mega-client', 'EEXPIRED with MFA code — code has expired', { email: maskEmail(email) })
         }
 
         if (!process.stdin.isTTY) {
+          logger.error('mega-client', 'MFA required but stdin is not a TTY — cannot prompt interactively')
           // Non-interactive: can't prompt — fail with a helpful message
           throw new Error(
             'MEGA MFA code required but stdin is not a terminal. ' +
@@ -97,15 +111,18 @@ async function createMegaClient (opts = {}) {
       }
 
       if (isExpired) {
+        logger.warn('mega-client', 'EEXPIRED (non-MFA) — retrying with fresh Storage instance', { attempt: attempt + 1 })
         // Non-MFA EEXPIRED (stale session): retry with a fresh Storage instance
         continue
       }
 
       // Any other error is not recoverable by retrying
+      logger.error('mega-client', 'unrecoverable login error', { attempt: attempt + 1, error: msg })
       throw err
     }
   }
 
+  logger.error('mega-client', 'authentication failed after max attempts', { maxAttempts: 4 })
   throw new Error('MEGA authentication failed after multiple attempts')
 }
 

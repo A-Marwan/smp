@@ -2,6 +2,7 @@
 
 const path = require('path')
 const Database = require('better-sqlite3')
+const logger = require('./logger')
 
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, '..', 'data.db')
 
@@ -15,6 +16,8 @@ let _db = null
  */
 function getDb () {
   if (_db) return _db
+
+  logger.info('db', 'opening database', { path: DB_PATH })
 
   _db = new Database(DB_PATH)
   _db.pragma('journal_mode = WAL')
@@ -37,6 +40,8 @@ function getDb () {
       created_at  TEXT    DEFAULT (datetime('now'))
     );
   `)
+
+  logger.info('db', 'schema ready')
 
   return _db
 }
