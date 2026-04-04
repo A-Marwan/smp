@@ -13,6 +13,8 @@ const { acquireSlot } = require('./stream-manager')
 const app = express()
 const router = getRouter(addonInterface)
 
+const SMALL_REQUEST_THRESHOLD = 2 * 1024 * 1024 // 2 MB — bypass concurrency limiter
+
 const MIME_TYPES = {
   '.mp4': 'video/mp4',
   '.mkv': 'video/x-matroska',
@@ -156,9 +158,13 @@ app.get('/:token/stream/:handle', async (req, res) => {
       res.setHeader('Content-Range', `bytes ${start}-${end}/${file.size}`)
       res.setHeader('Content-Length', chunkSize)
 
-      // Acquire concurrency slot before starting MEGA download
-      release = await acquireSlot(handle)
-      if (req.destroyed) { release(); release = null; return }
+      if (chunkSize < SMALL_REQUEST_THRESHOLD) {
+        logger.info('stream', 'small range — bypassing concurrency limiter', { handle, start, end, chunkSize })
+      } else {
+        // Acquire concurrency slot before starting MEGA download
+        release = await acquireSlot(handle)
+        if (req.destroyed) { release(); release = null; return }
+      }
 
       logger.info('stream', 'serving range request', { handle, start, end, chunkSize })
       downloadStream = file.download({ start, end: end + 1 })
