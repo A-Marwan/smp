@@ -27,7 +27,7 @@ SMP is a self-hosted Stremio addon that scans your MEGA cloud storage, matches v
 
 ```bash
 git clone git@github.com:A-Marwan/smp.git
-cd stremio-mega-proxy
+cd smp
 ```
 
 ### 2. Install dependencies
