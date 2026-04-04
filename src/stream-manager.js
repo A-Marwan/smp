@@ -71,17 +71,15 @@ function acquireSlot (handle, abortFn, start = 0, fileSize = 0) {
   const isSeek = state.aborts.some(a => Math.abs(a.start - start) > seekThreshold)
 
   if (isSeek) {
-    // Preempt active streams so the seek can start promptly
     const toAbort = state.aborts.splice(0)
     logger.info('stream-mgr', 'seek detected — preempting active streams', {
       handle, active: state.active, preempting: toAbort.length, seekStart: start
     })
-    for (const entry of toAbort) {
-      try { entry.fn() } catch (_) {}
-    }
-    // Aborted streams will call release() → decrement active → dequeue next
-    // Put this seek request at the front so it's served as soon as the slot opens
-    return new Promise((resolve) => {
+
+    // Enqueue the seek request BEFORE calling abort, so that when the aborted
+    // stream's release() runs synchronously it finds the queue non-empty and
+    // immediately hands the slot to the seek request.
+    const promise = new Promise((resolve) => {
       state.queue.unshift(() => {
         const abortEntry = abortFn ? { fn: abortFn, start } : null
         if (abortEntry) state.aborts.push(abortEntry)
@@ -89,6 +87,12 @@ function acquireSlot (handle, abortFn, start = 0, fileSize = 0) {
         resolve(makeRelease(handle, abortEntry))
       })
     })
+
+    for (const entry of toAbort) {
+      try { entry.fn() } catch (_) {}
+    }
+
+    return promise
   }
 
   return new Promise((resolve) => {
