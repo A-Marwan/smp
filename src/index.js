@@ -141,6 +141,16 @@ app.get('/:token/stream/:handle', async (req, res) => {
 
     const range = req.headers.range
     let downloadStream
+    // abortRef is populated after the download stream is created;
+    // used by the stream manager to preempt this stream on a seek.
+    const abortRef = {}
+    const abortSelf = () => {
+      streamDestroyed = true
+      if (abortRef.stream) { abortRef.stream.destroy(); abortRef.stream = null }
+      if (release) { release(); release = null }
+      if (!res.headersSent) res.destroy()
+      else if (!res.writableEnded) res.destroy()
+    }
 
     if (range && file.size) {
       const parts = range.replace(/bytes=/, '').split('-')
@@ -162,22 +172,24 @@ app.get('/:token/stream/:handle', async (req, res) => {
         logger.info('stream', 'small range — bypassing concurrency limiter', { handle, start, end, chunkSize })
       } else {
         // Acquire concurrency slot before starting MEGA download
-        release = await acquireSlot(handle)
-        if (req.destroyed) { release(); release = null; return }
+        release = await acquireSlot(handle, abortSelf, start, file.size)
+        if (req.destroyed || streamDestroyed) { if (release) { release(); release = null } return }
       }
 
       logger.info('stream', 'serving range request', { handle, start, end, chunkSize })
       downloadStream = file.download({ start, end: end + 1 })
+      abortRef.stream = downloadStream
     } else {
       // Acquire concurrency slot before starting MEGA download
-      release = await acquireSlot(handle)
-      if (req.destroyed) { release(); release = null; return }
+      release = await acquireSlot(handle, abortSelf, 0, file.size)
+      if (req.destroyed || streamDestroyed) { if (release) { release(); release = null } return }
 
       logger.info('stream', 'serving full file', { handle, size: file.size })
       if (file.size) {
         res.setHeader('Content-Length', file.size)
       }
       downloadStream = file.download()
+      abortRef.stream = downloadStream
     }
 
     downloadStream.on('error', (err) => {
@@ -210,11 +222,13 @@ app.get('/:token/stream/:handle', async (req, res) => {
     req.on('close', () => {
       logger.info('stream', 'client disconnected', { handle })
       streamDestroyed = true
+      abortRef.stream = null
       downloadStream.destroy()
       if (release) { release(); release = null }
     })
 
     downloadStream.on('end', () => {
+      abortRef.stream = null
       if (release) { release(); release = null }
     })
 
