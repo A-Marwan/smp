@@ -8,9 +8,6 @@ const handleState = new Map()
 
 const MAX_CONCURRENT_PER_HANDLE = 1
 const CLEANUP_DELAY_MS = 30000
-// If a new request's start offset differs from the active stream's start by more than this,
-// treat it as a seek and preempt the active stream immediately to avoid deadlock.
-const SEEK_PREEMPT_THRESHOLD = 10 * 1024 * 1024 // 10 MB
 
 function getState (handle) {
   if (!handleState.has(handle)) {
@@ -51,9 +48,10 @@ function makeRelease (handle, abortEntry) {
  * @param {string}   handle   - file handle
  * @param {Function} abortFn  - called when this stream should be aborted (preempted by a seek)
  * @param {number}   start    - byte offset this stream starts at (used for seek detection)
+ * @param {number}   fileSize - total file size in bytes (used to compute seek threshold)
  * @returns {Promise<Function>} resolves with release() — MUST be called when done
  */
-function acquireSlot (handle, abortFn, start = 0) {
+function acquireSlot (handle, abortFn, start = 0, fileSize = 0) {
   const state = getState(handle)
 
   if (state.active < MAX_CONCURRENT_PER_HANDLE) {
@@ -64,8 +62,13 @@ function acquireSlot (handle, abortFn, start = 0) {
     return Promise.resolve(makeRelease(handle, abortEntry))
   }
 
+  // Seek threshold: 2% of file size. Scales correctly across all file sizes — near-start
+  // duplicate connections (always within the first few KB) never trigger it, while genuine
+  // seeks to a different playback position always do.
+  const seekThreshold = fileSize > 0 ? fileSize * 0.02 : Infinity
+
   // Check if this is a seek — new start is far from any active stream's start
-  const isSeek = state.aborts.some(a => Math.abs(a.start - start) > SEEK_PREEMPT_THRESHOLD)
+  const isSeek = state.aborts.some(a => Math.abs(a.start - start) > seekThreshold)
 
   if (isSeek) {
     // Preempt active streams so the seek can start promptly

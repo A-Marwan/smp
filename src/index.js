@@ -172,7 +172,7 @@ app.get('/:token/stream/:handle', async (req, res) => {
         logger.info('stream', 'small range — bypassing concurrency limiter', { handle, start, end, chunkSize })
       } else {
         // Acquire concurrency slot before starting MEGA download
-        release = await acquireSlot(handle, abortSelf, start)
+        release = await acquireSlot(handle, abortSelf, start, file.size)
         if (req.destroyed || streamDestroyed) { if (release) { release(); release = null } return }
       }
 
@@ -181,7 +181,7 @@ app.get('/:token/stream/:handle', async (req, res) => {
       abortRef.stream = downloadStream
     } else {
       // Acquire concurrency slot before starting MEGA download
-      release = await acquireSlot(handle, abortSelf, 0)
+      release = await acquireSlot(handle, abortSelf, 0, file.size)
       if (req.destroyed || streamDestroyed) { if (release) { release(); release = null } return }
 
       logger.info('stream', 'serving full file', { handle, size: file.size })
