@@ -8,6 +8,7 @@ const { getRouter } = require('stremio-addon-sdk')
 const addonInterface = require('./addon')
 const { getStorage, clearStorage } = require('./mega-storage')
 const logger = require('./logger')
+const { acquireSlot } = require('./stream-manager')
 
 const app = express()
 const router = getRouter(addonInterface)
@@ -81,6 +82,32 @@ app.post('/:token/admin/mfa', async (req, res) => {
   }
 })
 
+// --- HEAD handler: return headers only, no MEGA download ---
+app.head('/:token/stream/:handle', async (req, res) => {
+  const expectedToken = process.env.USER_TOKEN
+  if (!expectedToken || req.params.token !== expectedToken) {
+    return res.status(403).end()
+  }
+
+  const handle = req.params.handle
+  try {
+    const storage = await getStorage()
+    const file = findInTree(storage.root, handle)
+    if (!file) return res.status(404).end()
+
+    const ext = path.extname(file.name || '').toLowerCase()
+    res.setHeader('Content-Type', MIME_TYPES[ext] || 'application/octet-stream')
+    res.setHeader('Accept-Ranges', 'bytes')
+    if (file.size) res.setHeader('Content-Length', file.size)
+
+    logger.info('stream', 'HEAD served', { handle, filename: file.name, size: file.size })
+    res.status(200).end()
+  } catch (err) {
+    logger.error('stream', 'HEAD error', { handle, error: err.message })
+    if (!res.headersSent) res.status(500).end()
+  }
+})
+
 // --- Proxy streaming endpoint (must be registered before the Stremio SDK catch-all) ---
 app.get('/:token/stream/:handle', async (req, res) => {
   const expectedToken = process.env.USER_TOKEN
@@ -90,6 +117,8 @@ app.get('/:token/stream/:handle', async (req, res) => {
   }
 
   const handle = req.params.handle
+  let release = null
+  let streamDestroyed = false
 
   try {
     const storage = await getStorage()
@@ -127,9 +156,17 @@ app.get('/:token/stream/:handle', async (req, res) => {
       res.setHeader('Content-Range', `bytes ${start}-${end}/${file.size}`)
       res.setHeader('Content-Length', chunkSize)
 
+      // Acquire concurrency slot before starting MEGA download
+      release = await acquireSlot(handle)
+      if (req.destroyed) { release(); release = null; return }
+
       logger.info('stream', 'serving range request', { handle, start, end, chunkSize })
       downloadStream = file.download({ start, end: end + 1 })
     } else {
+      // Acquire concurrency slot before starting MEGA download
+      release = await acquireSlot(handle)
+      if (req.destroyed) { release(); release = null; return }
+
       logger.info('stream', 'serving full file', { handle, size: file.size })
       if (file.size) {
         res.setHeader('Content-Length', file.size)
@@ -138,6 +175,9 @@ app.get('/:token/stream/:handle', async (req, res) => {
     }
 
     downloadStream.on('error', (err) => {
+      // Suppress errors after intentional destroy (race condition fix)
+      if (streamDestroyed) return
+
       const msg = err.message || ''
 
       if (msg.includes('EEXPIRED')) {
@@ -163,11 +203,19 @@ app.get('/:token/stream/:handle', async (req, res) => {
 
     req.on('close', () => {
       logger.info('stream', 'client disconnected', { handle })
+      streamDestroyed = true
       downloadStream.destroy()
+      if (release) { release(); release = null }
+    })
+
+    downloadStream.on('end', () => {
+      if (release) { release(); release = null }
     })
 
     downloadStream.pipe(res)
   } catch (err) {
+    if (release) { release(); release = null }
+
     const msg = err.message || ''
 
     if (msg.includes('EEXPIRED')) {
