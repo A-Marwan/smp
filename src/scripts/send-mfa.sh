@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Send a TOTP code to the running SMP server
-# Usage: ./scripts/send-mfa.sh 123456
+# Usage: ./src/scripts/send-mfa.sh 123456
 
 set -euo pipefail
 CODE="${1:?Usage: send-mfa.sh <totp-code>}"
 
 # Source .env for USER_TOKEN and PORT
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-if [ -f "$SCRIPT_DIR/../.env" ]; then
-  set -a; source "$SCRIPT_DIR/../.env"; set +a
+if [ -f "$SCRIPT_DIR/../../.env" ]; then
+  set -a; source "$SCRIPT_DIR/../../.env"; set +a
 fi
 
 PORT="${PORT:-7000}"
