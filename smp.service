@@ -4,11 +4,11 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/smp
-ExecStart=/usr/bin/npm start
-EnvironmentFile=/opt/smp/.env
-Restart=on-failure
-RestartSec=5
+WorkingDirectory=.../smp
+EnvironmentFile=.../smp/.env
+ExecStart=.../bin/node src/index.js
+Restart=always
+RestartSec=10
 
 [Install]
 WantedBy=multi-user.target
