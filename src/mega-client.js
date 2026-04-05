@@ -34,15 +34,20 @@ function prompt (question) {
  * @returns {Promise<Storage>}
  */
 function loginOnce ({ email, password, mfaCode }) {
-  const storageOpts = { email, password, keepalive: true, autologin: false }
+  const storageOpts = { email, password, keepalive: false, autologin: false }
   if (mfaCode) storageOpts.secondFactorCode = mfaCode
 
   const storage = new Storage(storageOpts)
 
   return new Promise((resolve, reject) => {
     storage.login((err) => {
-      if (!err) return resolve(storage)
-      reject(err)
+      if (err) return reject(err)
+      if (storage.isReady) {
+        return resolve(storage)
+      }
+      storage.once('ready', () => {
+        resolve(storage)
+      })
     })
   })
 }

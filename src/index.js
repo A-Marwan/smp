@@ -4,6 +4,9 @@ require('dotenv').config({ override: true })
 const path = require('path')
 const PORT = parseInt(process.env.PORT || '7000', 10)
 const express = require('express')
+const https = require('https')
+https.globalAgent.maxSockets = 100 // Prevent connection pool exhaustion
+
 const { getRouter } = require('stremio-addon-sdk')
 const addonInterface = require('./addon')
 const { getStorage, clearStorage } = require('./mega-storage')
@@ -178,6 +181,7 @@ app.get('/:token/stream/:handle', async (req, res) => {
 
       logger.info('stream', 'serving range request', { handle, start, end, chunkSize })
       downloadStream = file.download({ start, end: end + 1 })
+      logger.info('stream', 'download stream created (range)', { handle })
       abortRef.stream = downloadStream
     } else {
       // Acquire concurrency slot before starting MEGA download
@@ -189,6 +193,7 @@ app.get('/:token/stream/:handle', async (req, res) => {
         res.setHeader('Content-Length', file.size)
       }
       downloadStream = file.download()
+      logger.info('stream', 'download stream created (full)', { handle })
       abortRef.stream = downloadStream
     }
 
@@ -197,10 +202,10 @@ app.get('/:token/stream/:handle', async (req, res) => {
       if (streamDestroyed) return
 
       const msg = err.message || ''
+      logger.error('stream', 'MEGA download stream error', { handle, error: msg })
 
       if (msg.includes('EEXPIRED')) {
         clearStorage()
-        logger.error('stream', 'MEGA session expired during download', { handle })
         if (!res.headersSent) {
           return res.status(503).json({ error: 'MEGA session expired — admin must re-authenticate via POST /:token/admin/mfa' })
         }
@@ -209,29 +214,50 @@ app.get('/:token/stream/:handle', async (req, res) => {
 
       if (!res.headersSent) {
         if (msg.includes('EOVERQUOTA') || msg.includes('over quota')) {
-          logger.error('stream', 'MEGA transfer quota exceeded', { handle })
           return res.status(429).json({ error: 'MEGA transfer quota exceeded. Try again later.' })
         }
-        logger.error('stream', 'MEGA download error', { handle, error: msg })
         return res.status(502).json({ error: 'MEGA download failed' })
       }
-      logger.error('stream', 'MEGA download error (headers already sent)', { handle, error: msg })
       res.destroy()
     })
 
+    const firstDataTimeout = setTimeout(() => {
+      if (!streamDestroyed) {
+        logger.error('stream', 'timeout waiting for first data chunk', { handle })
+        streamDestroyed = true
+        if (downloadStream) {
+          try { downloadStream.destroy() } catch (_) {}
+        }
+        if (release) { release(); release = null }
+        if (!res.headersSent) res.status(504).end()
+        else res.destroy()
+      }
+    }, 30000)
+
     req.on('close', () => {
+      clearTimeout(firstDataTimeout)
       logger.info('stream', 'client disconnected', { handle })
       streamDestroyed = true
       abortRef.stream = null
-      downloadStream.destroy()
+      if (downloadStream) {
+        try { downloadStream.destroy() } catch (_) {}
+      }
       if (release) { release(); release = null }
     })
 
     downloadStream.on('end', () => {
+      clearTimeout(firstDataTimeout)
+      logger.info('stream', 'download stream ended', { handle })
       abortRef.stream = null
       if (release) { release(); release = null }
     })
 
+    downloadStream.once('data', () => {
+      clearTimeout(firstDataTimeout)
+      logger.info('stream', 'first data chunk received', { handle })
+    })
+
+    logger.info('stream', 'piping to response', { handle })
     downloadStream.pipe(res)
   } catch (err) {
     if (release) { release(); release = null }
