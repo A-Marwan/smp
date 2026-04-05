@@ -70,9 +70,13 @@ function acquireSlot (handle, abortFn, start = 0, fileSize = 0) {
   // Check if this is a seek — new start is far from any active stream's start
   const isSeek = state.aborts.some(a => Math.abs(a.start - start) > seekThreshold)
 
-  if (isSeek) {
+  // Check if this is a duplicate — same start position as an active stream.
+  // Players send duplicate requests when retrying; the old connection is stale.
+  const isDuplicate = state.aborts.some(a => a.start === start)
+
+  if (isSeek || isDuplicate) {
     const toAbort = state.aborts.splice(0)
-    logger.info('stream-mgr', 'seek detected — preempting active streams', {
+    logger.info('stream-mgr', isSeek ? 'seek detected — preempting active streams' : 'duplicate start — preempting stale stream', {
       handle, active: state.active, preempting: toAbort.length, seekStart: start
     })
 
