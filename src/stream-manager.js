@@ -12,6 +12,10 @@ const CLEANUP_DELAY_MS = 30000
 // Prevents an infinite kick-start loop when the player retries faster than MEGA
 // can deliver the first bytes (~150–200 ms retry interval vs ~200–400 ms MEGA startup).
 const DUPLICATE_PREEMPT_COOLDOWN_MS = 2000
+// If a queued request is still waiting behind a same-start active stream after this long,
+// force-preempt the active stream. Handles the case where the player commits to the queued
+// connection but the active stream holds the slot with data the player isn't consuming.
+const DUPLICATE_FORCE_PREEMPT_DELAY_MS = 3000
 
 function getState (handle) {
   if (!handleState.has(handle)) {
@@ -109,13 +113,37 @@ function acquireSlot (handle, abortFn, start = 0, fileSize = 0) {
   }
 
   return new Promise((resolve) => {
-    logger.info('stream-mgr', 'request queued', { handle, active: state.active, queued: state.queue.length + 1 })
-    state.queue.push(() => {
+    let forceTimer = null
+
+    const callback = () => {
+      clearTimeout(forceTimer)
       const abortEntry = abortFn ? { fn: abortFn, start } : null
       if (abortEntry) state.aborts.push(abortEntry)
       logger.info('stream-mgr', 'queued slot acquired', { handle, active: state.active, queued: state.queue.length })
       resolve(makeRelease(handle, abortEntry))
-    })
+    }
+
+    logger.info('stream-mgr', 'request queued', { handle, active: state.active, queued: state.queue.length + 1 })
+    state.queue.push(callback)
+
+    // If queued behind a stream at the same start position, schedule a forced preemption.
+    // The cooldown prevented an immediate preempt to avoid the retry loop, but the player
+    // may have committed to THIS connection and be ignoring the active stream's data.
+    // After the delay, forcibly hand the slot to this request.
+    if (state.aborts.some(a => a.start === start)) {
+      forceTimer = setTimeout(() => {
+        const idx = state.queue.indexOf(callback)
+        if (idx === -1) return // Already dequeued naturally — nothing to do
+        logger.info('stream-mgr', 'force-preempting stale stream for long-queued request', { handle, delayMs: DUPLICATE_FORCE_PREEMPT_DELAY_MS })
+        state.lastDuplicatePreemptAt = Date.now()
+        state.queue.splice(idx, 1)
+        state.queue.unshift(callback)
+        const toAbort = state.aborts.splice(0)
+        for (const entry of toAbort) {
+          try { entry.fn() } catch (_) {}
+        }
+      }, DUPLICATE_FORCE_PREEMPT_DELAY_MS)
+    }
   })
 }
 
