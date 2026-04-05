@@ -15,7 +15,7 @@ const DUPLICATE_PREEMPT_COOLDOWN_MS = 2000
 // If a queued request is still waiting behind a same-start active stream after this long,
 // force-preempt the active stream. Handles the case where the player commits to the queued
 // connection but the active stream holds the slot with data the player isn't consuming.
-const DUPLICATE_FORCE_PREEMPT_DELAY_MS = 3000
+const DUPLICATE_FORCE_PREEMPT_DELAY_MS = 1000
 
 function getState (handle) {
   if (!handleState.has(handle)) {
