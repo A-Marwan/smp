@@ -13,7 +13,7 @@ const VIDEO_EXTS = new Set(['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.m4v', '.ts
  * Index a list of MEGA file entries into the SQLite database.
  *
  * For each video file the function:
- *   1. Detects whether the file is anime (based on its MEGA folder path)
+ *   1. Detects whether the file is anime (folder path match OR title-less SxxExx filename)
  *   2. Parses the filename into title / year / season / episode
  *   3. Resolves to an ID via Cinemeta (regular) or Kitsu (anime)
  *   4. Upserts the record into the `files` table
@@ -48,12 +48,20 @@ async function indexFiles (files, { animeFolder = null } = {}) {
       continue
     }
 
-    // Determine whether this file lives inside the configured anime folder
-    const isAnime = Boolean(
+    // Determine whether this file should be indexed as anime.
+    // Primary: explicit folder match via MEGA_ANIME_FOLDER.
+    // Secondary: filename starts with SxxExx with no series title prefix
+    //   (e.g. "S02E01-Episode Title [hash].mkv") — a pattern virtually
+    //   exclusive to anime distributions where the series name is only
+    //   in the parent folder.
+    const inAnimeFolder = Boolean(
       animeFolder &&
       file.path &&
       file.path.split('/').includes(animeFolder)
     )
+    const fileBase = file.name.replace(/\.[^.]+$/, '')
+    const isTitlelessEpisode = /^[Ss]\d{1,2}[Ee]\d{1,2}[-\s]/.test(fileBase)
+    const isAnime = inAnimeFolder || isTitlelessEpisode
 
     if (isAnime) {
       await indexAnimeFile(file, animeFolder, insertFile, insertUnmatched, stats)
@@ -109,19 +117,36 @@ async function indexRegularFile (file, insertFile, insertUnmatched, stats) {
 // e.g. "S02E01-Episode Title [hash]" or "S02E01 Episode Title"
 const LEADING_EP_RE = /^[Ss](\d{1,2})[Ee](\d{1,2})/
 
+// Folder names that indicate a season subdivision, not the series title.
+const SEASON_FOLDER_RE = /^[Ss]eason\s*\d+$|^[Ss]\d+$/
+
 /**
- * When a filename starts with SxxExx (e.g. "S02E01-Episode Title [hash].mkv"),
- * the anime title is absent from the filename. Extract it from the parent
- * folder — the segment immediately after the configured anime folder.
+ * Derive the anime series title from the file's MEGA folder path.
  *
- * e.g. path="Anime/Solo Leveling", animeFolder="Anime" → "Solo Leveling"
- *      path="Anime/Solo Leveling/Season 2", animeFolder="Anime" → "Solo Leveling"
+ * When animeFolderName is provided, returns the path segment immediately
+ * after that folder (e.g. "Anime/Solo Leveling" → "Solo Leveling").
+ *
+ * Without animeFolderName, walks path segments deepest-first and returns
+ * the first segment that does not look like a season folder, so both
+ * "Solo Leveling" and "Anime/Solo Leveling/Season 2" yield "Solo Leveling".
  */
 function extractAnimeTitleFromPath (filePath, animeFolderName) {
-  if (!filePath || !animeFolderName) return null
-  const segments = filePath.split('/')
-  const idx = segments.indexOf(animeFolderName)
-  return (idx !== -1 && idx + 1 < segments.length) ? segments[idx + 1] : null
+  if (!filePath) return null
+  const segments = filePath.split('/').filter(Boolean)
+  if (!segments.length) return null
+
+  if (animeFolderName) {
+    const idx = segments.indexOf(animeFolderName)
+    return (idx !== -1 && idx + 1 < segments.length) ? segments[idx + 1] : null
+  }
+
+  // No anime folder configured — use the deepest non-season folder segment.
+  for (let i = segments.length - 1; i >= 0; i--) {
+    if (!SEASON_FOLDER_RE.test(segments[i])) {
+      return segments[i]
+    }
+  }
+  return segments[0]
 }
 
 /**
