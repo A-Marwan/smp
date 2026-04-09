@@ -56,7 +56,7 @@ async function indexFiles (files, { animeFolder = null } = {}) {
     )
 
     if (isAnime) {
-      await indexAnimeFile(file, insertFile, insertUnmatched, stats)
+      await indexAnimeFile(file, animeFolder, insertFile, insertUnmatched, stats)
     } else {
       await indexRegularFile(file, insertFile, insertUnmatched, stats)
     }
@@ -105,12 +105,51 @@ async function indexRegularFile (file, insertFile, insertUnmatched, stats) {
   stats.matched++
 }
 
+// Matches a SxxExx code at the very start of a filename base (no title prefix).
+// e.g. "S02E01-Episode Title [hash]" or "S02E01 Episode Title"
+const LEADING_EP_RE = /^[Ss](\d{1,2})[Ee](\d{1,2})/
+
+/**
+ * When a filename starts with SxxExx (e.g. "S02E01-Episode Title [hash].mkv"),
+ * the anime title is absent from the filename. Extract it from the parent
+ * folder — the segment immediately after the configured anime folder.
+ *
+ * e.g. path="Anime/Solo Leveling", animeFolder="Anime" → "Solo Leveling"
+ *      path="Anime/Solo Leveling/Season 2", animeFolder="Anime" → "Solo Leveling"
+ */
+function extractAnimeTitleFromPath (filePath, animeFolderName) {
+  if (!filePath || !animeFolderName) return null
+  const segments = filePath.split('/')
+  const idx = segments.indexOf(animeFolderName)
+  return (idx !== -1 && idx + 1 < segments.length) ? segments[idx + 1] : null
+}
+
 /**
  * Index an anime file using Kitsu metadata.
  * Stores the entry with a "kitsu:{id}" value in the imdb_id column.
  */
-async function indexAnimeFile (file, insertFile, insertUnmatched, stats) {
-  const parsed = parseAnimeFilename(file.name)
+async function indexAnimeFile (file, animeFolder, insertFile, insertUnmatched, stats) {
+  let parsed = parseAnimeFilename(file.name)
+
+  // Filenames like "S02E01-Episode Title [hash].mkv" contain no anime title —
+  // only an episode code followed by the episode title. Detect this by checking
+  // whether the extracted title itself begins with a SxxExx marker, then
+  // override with the folder-derived anime title.
+  if (/^[Ss]\d{1,2}[Ee]\d{1,2}(\s|$)/.test(parsed.title)) {
+    const folderTitle = extractAnimeTitleFromPath(file.path, animeFolder)
+    const epMatch = LEADING_EP_RE.exec(file.name.replace(/\.[^.]+$/, ''))
+    if (folderTitle && epMatch) {
+      logger.info('indexer', 'anime title derived from folder', { filename: file.name, folderTitle })
+      parsed = {
+        type: 'series',
+        title: folderTitle,
+        year: null,
+        season: parseInt(epMatch[1], 10),
+        episode: parseInt(epMatch[2], 10),
+        raw: file.name
+      }
+    }
+  }
 
   let kitsuId
   try {
