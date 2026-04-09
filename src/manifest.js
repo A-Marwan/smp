@@ -8,6 +8,7 @@ module.exports = {
   idPrefixes: ['tt'],
   catalogs: [
     { type: 'movie', id: 'smp-movies', name: 'MEGA Movies' },
-    { type: 'series', id: 'smp-series', name: 'MEGA Series' }
+    { type: 'series', id: 'smp-series', name: 'MEGA Series' },
+    { type: 'series', id: 'smp-anime', name: 'MEGA Anime' }
   ]
 }

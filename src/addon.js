@@ -11,17 +11,21 @@ builder.defineCatalogHandler(async ({ type, id }) => {
   const db = getDb()
 
   let rows
-  if (type === 'movie') {
+  if (id === 'smp-anime') {
     rows = db.prepare(
-      'SELECT DISTINCT imdb_id FROM files WHERE season = 0 AND episode = 0'
+      'SELECT DISTINCT imdb_id FROM files WHERE is_anime = 1'
+    ).all()
+  } else if (type === 'movie') {
+    rows = db.prepare(
+      'SELECT DISTINCT imdb_id FROM files WHERE season = 0 AND episode = 0 AND is_anime = 0'
     ).all()
   } else {
     rows = db.prepare(
-      'SELECT DISTINCT imdb_id FROM files WHERE season > 0'
+      'SELECT DISTINCT imdb_id FROM files WHERE season > 0 AND is_anime = 0'
     ).all()
   }
 
-  logger.info('addon', 'catalog DB query complete', { type, rowCount: rows.length })
+  logger.info('addon', 'catalog DB query complete', { type, id, rowCount: rows.length })
 
   const metas = []
   for (const row of rows) {

@@ -6,10 +6,10 @@ const logger = require('./logger')
 // Map<handle, { queue: Function[], active: number, aborts: Array<{fn, start}>, idleTimer: NodeJS.Timeout | null }>
 const handleState = new Map()
 
-const MAX_CONCURRENT_PER_HANDLE = 1
+const MAX_CONCURRENT_PER_HANDLE = 2
 const CLEANUP_DELAY_MS = 30000
 
-function getState (handle) {
+function getState(handle) {
   if (!handleState.has(handle)) {
     handleState.set(handle, { queue: [], active: 0, aborts: [], idleTimer: null })
   }
@@ -19,9 +19,9 @@ function getState (handle) {
   return state
 }
 
-function makeRelease (handle, abortEntry) {
+function makeRelease(handle, abortEntry) {
   let released = false
-  return function release () {
+  return function release() {
     if (released) return
     released = true
     const state = handleState.get(handle)
@@ -51,7 +51,7 @@ function makeRelease (handle, abortEntry) {
  * @param {number}   fileSize - total file size in bytes (used to compute seek threshold)
  * @returns {Promise<Function>} resolves with release() — MUST be called when done
  */
-function acquireSlot (handle, abortFn, start = 0, fileSize = 0) {
+function acquireSlot(handle, abortFn, start = 0, fileSize = 0) {
   const state = getState(handle)
 
   if (state.active < MAX_CONCURRENT_PER_HANDLE) {
@@ -89,7 +89,7 @@ function acquireSlot (handle, abortFn, start = 0, fileSize = 0) {
     })
 
     for (const entry of toAbort) {
-      try { entry.fn() } catch (_) {}
+      try { entry.fn() } catch (_) { }
     }
 
     return promise

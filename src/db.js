@@ -27,6 +27,7 @@ function getDb () {
       imdb_id     TEXT    NOT NULL,
       season      INTEGER NOT NULL DEFAULT 0,
       episode     INTEGER NOT NULL DEFAULT 0,
+      is_anime    INTEGER NOT NULL DEFAULT 0,
       filename    TEXT,
       mega_handle TEXT,
       PRIMARY KEY (imdb_id, season, episode)
