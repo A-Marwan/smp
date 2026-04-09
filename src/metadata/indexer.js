@@ -1,7 +1,8 @@
 'use strict'
 
-const { parseFilename } = require('./parser')
+const { parseFilename, parseAnimeFilename } = require('./parser')
 const { resolveToImdbId } = require('./resolver')
+const { resolveToKitsuId } = require('./kitsu')
 const { getDb } = require('../db')
 const logger = require('../logger')
 
@@ -12,15 +13,18 @@ const VIDEO_EXTS = new Set(['.mkv', '.mp4', '.avi', '.mov', '.wmv', '.m4v', '.ts
  * Index a list of MEGA file entries into the SQLite database.
  *
  * For each video file the function:
- *   1. Parses the filename into title / year / season / episode
- *   2. Calls the Cinemeta API to resolve to an IMDb ID
- *   3. Upserts the record into the `files` table
- *   4. On any failure, writes to `unmatched_files` and continues
+ *   1. Detects whether the file is anime (based on its MEGA folder path)
+ *   2. Parses the filename into title / year / season / episode
+ *   3. Resolves to an ID via Cinemeta (regular) or Kitsu (anime)
+ *   4. Upserts the record into the `files` table
+ *   5. On any failure, writes to `unmatched_files` and continues
  *
  * @param {import('../crawler').FileEntry[]} files  Output from crawlMega()
+ * @param {{ animeFolder?: string|null }} [opts]
+ *   animeFolder — MEGA folder name whose contents are treated as anime (e.g. "Anime")
  * @returns {Promise<{ matched: number, unmatched: number, skipped: number }>}
  */
-async function indexFiles (files) {
+async function indexFiles (files, { animeFolder = null } = {}) {
   const db = getDb()
 
   const insertFile = db.prepare(`
@@ -44,44 +48,102 @@ async function indexFiles (files) {
       continue
     }
 
-    const parsed = parseFilename(file.name)
+    // Determine whether this file lives inside the configured anime folder
+    const isAnime = Boolean(
+      animeFolder &&
+      file.path &&
+      file.path.split('/').includes(animeFolder)
+    )
 
-    let imdbId
-    try {
-      imdbId = await resolveToImdbId({ title: parsed.title, year: parsed.year, type: parsed.type })
-    } catch (err) {
-      const reason = err.message
-      logger.warn('indexer', 'resolve failed', { filename: file.name, reason })
-      insertUnmatched.run({ filename: file.name, mega_handle: file.handle, reason })
-      stats.unmatched++
-      continue
+    if (isAnime) {
+      await indexAnimeFile(file, insertFile, insertUnmatched, stats)
+    } else {
+      await indexRegularFile(file, insertFile, insertUnmatched, stats)
     }
-
-    if (!imdbId) {
-      const reason = `No match found on Cinemeta for "${parsed.title}"${parsed.year ? ` (${parsed.year})` : ''}`
-      logger.warn('indexer', 'no Cinemeta match', { filename: file.name, reason })
-      insertUnmatched.run({ filename: file.name, mega_handle: file.handle, reason })
-      stats.unmatched++
-      continue
-    }
-
-    // Movies use season=0 / episode=0 so the composite PK stays stable
-    insertFile.run({
-      imdb_id: imdbId,
-      season: parsed.season ?? 0,
-      episode: parsed.episode ?? 0,
-      filename: file.name,
-      mega_handle: file.handle
-    })
-
-    const epLabel = parsed.season != null
-      ? ` S${String(parsed.season).padStart(2, '0')}E${String(parsed.episode).padStart(2, '0')}`
-      : ''
-    logger.info('indexer', 'file indexed', { filename: file.name, imdbId, episode: epLabel || null })
-    stats.matched++
   }
 
   return stats
+}
+
+/**
+ * Index a regular (non-anime) file using Cinemeta / IMDb metadata.
+ */
+async function indexRegularFile (file, insertFile, insertUnmatched, stats) {
+  const parsed = parseFilename(file.name)
+
+  let imdbId
+  try {
+    imdbId = await resolveToImdbId({ title: parsed.title, year: parsed.year, type: parsed.type })
+  } catch (err) {
+    const reason = err.message
+    logger.warn('indexer', 'Cinemeta resolve failed', { filename: file.name, reason })
+    insertUnmatched.run({ filename: file.name, mega_handle: file.handle, reason })
+    stats.unmatched++
+    return
+  }
+
+  if (!imdbId) {
+    const reason = `No match found on Cinemeta for "${parsed.title}"${parsed.year ? ` (${parsed.year})` : ''}`
+    logger.warn('indexer', 'no Cinemeta match', { filename: file.name, reason })
+    insertUnmatched.run({ filename: file.name, mega_handle: file.handle, reason })
+    stats.unmatched++
+    return
+  }
+
+  insertFile.run({
+    imdb_id: imdbId,
+    season: parsed.season ?? 0,
+    episode: parsed.episode ?? 0,
+    filename: file.name,
+    mega_handle: file.handle
+  })
+
+  const epLabel = parsed.season != null
+    ? ` S${String(parsed.season).padStart(2, '0')}E${String(parsed.episode).padStart(2, '0')}`
+    : ''
+  logger.info('indexer', 'file indexed', { filename: file.name, imdbId, episode: epLabel || null })
+  stats.matched++
+}
+
+/**
+ * Index an anime file using Kitsu metadata.
+ * Stores the entry with a "kitsu:{id}" value in the imdb_id column.
+ */
+async function indexAnimeFile (file, insertFile, insertUnmatched, stats) {
+  const parsed = parseAnimeFilename(file.name)
+
+  let kitsuId
+  try {
+    kitsuId = await resolveToKitsuId({ title: parsed.title, year: parsed.year, type: parsed.type })
+  } catch (err) {
+    const reason = err.message
+    logger.warn('indexer', 'Kitsu resolve failed', { filename: file.name, reason })
+    insertUnmatched.run({ filename: file.name, mega_handle: file.handle, reason })
+    stats.unmatched++
+    return
+  }
+
+  if (!kitsuId) {
+    const reason = `No match found on Kitsu for "${parsed.title}"${parsed.year ? ` (${parsed.year})` : ''}`
+    logger.warn('indexer', 'no Kitsu match', { filename: file.name, reason })
+    insertUnmatched.run({ filename: file.name, mega_handle: file.handle, reason })
+    stats.unmatched++
+    return
+  }
+
+  insertFile.run({
+    imdb_id: kitsuId,
+    season: parsed.season ?? 0,
+    episode: parsed.episode ?? 0,
+    filename: file.name,
+    mega_handle: file.handle
+  })
+
+  const epLabel = parsed.season != null
+    ? ` S${String(parsed.season).padStart(2, '0')}E${String(parsed.episode).padStart(2, '0')}`
+    : ''
+  logger.info('indexer', 'anime file indexed', { filename: file.name, kitsuId, episode: epLabel || null })
+  stats.matched++
 }
 
 /** Return the lowercased extension of a filename (e.g. ".mkv"), or "" if none. */

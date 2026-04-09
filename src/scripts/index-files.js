@@ -45,7 +45,12 @@ async function main () {
 
   console.log(`Found ${result.totalFiles} video-candidate file(s). Starting metadata lookup...\n`)
 
-  const stats = await indexFiles(result.files)
+  const animeFolder = process.env.MEGA_ANIME_FOLDER || null
+  if (animeFolder) {
+    console.log(`Anime folder: "${animeFolder}" (files inside will be indexed via Kitsu)\n`)
+  }
+
+  const stats = await indexFiles(result.files, { animeFolder })
 
   console.log('\n=== Indexing Complete ===')
   console.log(`Matched   : ${stats.matched}`)
