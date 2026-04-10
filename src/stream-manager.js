@@ -6,7 +6,7 @@ const logger = require('./logger')
 // Map<handle, { queue: Function[], active: number, aborts: Array<{fn, start}>, idleTimer: NodeJS.Timeout | null }>
 const handleState = new Map()
 
-const MAX_CONCURRENT_PER_HANDLE = 1
+const MAX_CONCURRENT_PER_HANDLE = 3
 const CLEANUP_DELAY_MS = 30000
 
 function getState (handle) {
